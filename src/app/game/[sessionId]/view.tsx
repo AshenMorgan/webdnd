@@ -3,11 +3,12 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { User } from "@supabase/supabase-js"; // 导入User类型
-import { supabase } from "@/lib/supabase/client"; // 客户端Supabase
-import { allScenarios } from "@/../data/scenarios"; // 导入所有场景数据
-import { calculateFinalAttributes } from "@/lib/utils"; // 导入工具函数
-import { GameTableRow, DndScenario, DialogueEntry } from "@/app/types/types"; // 导入类型
+import { User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase/client";
+import { allScenarios } from "@/../data/scenarios"; // 修正导入路径
+import { calculateFinalAttributes } from "@/lib/utils";
+import { GameTableRow, DndScenario, DialogueEntry } from "@/app/types/types";
+import TextareaAutosize from "react-textarea-autosize";
 
 /**
  * 游戏会话视图 (客户端组件)
@@ -36,6 +37,7 @@ export default function GameSessionView({
   const [isProcessing, setIsProcessing] = useState<boolean>(true); // 初始设置为true表示加载中
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null); // 在客户端获取用户
+  const [dmThinking, setDmThinking] = useState<boolean>(false); // DM思考状态
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // 滚动到最新消息
@@ -155,45 +157,108 @@ export default function GameSessionView({
   // 在对话历史更新后滚动到底部
   useEffect(() => {
     scrollToBottom();
-  }, [gameData?.state.dialogueHistory, scrollToBottom]); // 依赖 gameData 和 scrollToBottom
+  }, [gameData?.state.dialogueHistory, dmThinking, scrollToBottom]); // 依赖 gameData, dmThinking 和 scrollToBottom
 
   // 处理用户提交行动
   const handleSubmitAction = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userActionInput.trim() || isProcessing) return;
+    if (!userActionInput.trim() || isProcessing || dmThinking) return;
 
-    setIsProcessing(true);
+    // 1. 立即显示用户消息并清空输入框
+    const currentUserMessage: DialogueEntry = {
+      role: "user",
+      text: userActionInput.trim(),
+      timestamp: new Date().toISOString(),
+    };
+
+    setGameData((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        state: {
+          ...prev.state,
+          dialogueHistory: [...prev.state.dialogueHistory, currentUserMessage],
+        },
+      };
+    });
+    setUserActionInput(""); // 清空输入框
+
+    setIsProcessing(true); // 开始处理
+    setDmThinking(true); // DM开始思考
     setError(null);
 
     try {
       if (!gameData || !scenarioTemplate) {
         setError("游戏数据或场景模板未加载，请稍后再试。");
         setIsProcessing(false);
+        setDmThinking(false);
         return;
       }
 
       // 调用服务器动作来处理用户行动和DM回应
+      // 服务器动作会返回包含DM回应在内的最新游戏状态
       const updatedGameState = await handleUserAction(
         gameData.id,
-        userActionInput
+        currentUserMessage.text // 传递用户实际输入的消息
       );
 
-      // 更新客户端的游戏状态
-      setGameData((prev) =>
-        prev
-          ? {
-              ...prev,
-              state: updatedGameState,
-              updated_at: new Date().toISOString(), // 确保updated_at也更新
-            }
-          : prev
+      // 2. 更新客户端的游戏状态（此时DM回应已包含在内）
+      setGameData((prev) => {
+        if (!prev) return null; // Should not happen if gameData is valid above
+        return {
+          ...prev,
+          state: updatedGameState,
+          updated_at: new Date().toISOString(),
+        };
+      });
+
+      // 3. 重新计算最终属性以更新显示
+      const calculatedFinalAttributes = calculateFinalAttributes(
+        updatedGameState.baseAttributes,
+        updatedGameState.selectedCustomizations,
+        scenarioTemplate
       );
-      setUserActionInput(""); // 清空输入框
+      setFinalAttributes(calculatedFinalAttributes);
     } catch (err: any) {
       console.error("Failed to process user action:", err);
       setError(`处理行动失败: ${err.message || "未知错误"}`);
+      // 如果出现错误，将DM的思考状态也清除
+      setGameData((prev) => {
+        // 错误时也把用户消息加进去，但DM思考可能就没有了
+        if (!prev) return null;
+        // 确保即使出错，用户消息也留在历史中
+        const lastEntry =
+          prev.state.dialogueHistory[prev.state.dialogueHistory.length - 1];
+        if (
+          lastEntry &&
+          lastEntry.role === "user" &&
+          lastEntry.text === currentUserMessage.text
+        ) {
+          // 如果用户消息已经在最后了，不再重复添加
+          return prev;
+        }
+        return {
+          ...prev,
+          state: {
+            ...prev.state,
+            dialogueHistory: [
+              ...prev.state.dialogueHistory,
+              currentUserMessage,
+            ],
+          },
+        };
+      });
     } finally {
-      setIsProcessing(false);
+      setIsProcessing(false); // 结束处理
+      setDmThinking(false); // DM停止思考
+    }
+  };
+
+  // 处理键盘事件，实现Ctrl+Enter提交
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault(); // 阻止默认的换行行为
+      handleSubmitAction(e as any); // 触发提交
     }
   };
 
@@ -247,7 +312,7 @@ export default function GameSessionView({
 
   return (
     <div className="flex flex-col h-screen w-full bg-gray-900 text-white font-inter">
-      {/* Header */}
+      {/* Header (可以考虑将其移到全局 layout.tsx 中) */}
       <header className="flex-shrink-0 bg-gray-800 p-4 shadow-lg border-b border-gray-700">
         <div className="max-w-4xl mx-auto flex justify-between items-center">
           <h1 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">
@@ -282,6 +347,9 @@ export default function GameSessionView({
               .custom-scrollbar-thin::-webkit-scrollbar-thumb:hover {
                 background: #805ad5; /* Tailwind purple-600 */
               }
+              .dm-message-text {
+                white-space: pre-wrap; /* 保留空白和换行符 */
+              }
             `}</style>
             <div className="space-y-4">
               {gameData.state.dialogueHistory.map((entry, index) => (
@@ -297,9 +365,16 @@ export default function GameSessionView({
                     [{entry.role === "user" ? "玩家行动" : "DM "} -{" "}
                     {formatDate(entry.timestamp)}]:
                   </span>
-                  <p className="mt-1">{entry.text}</p>
+                  {/* 使用 dm-message-text 类来应用 white-space: pre-wrap */}
+                  <p className="mt-1 dm-message-text">{entry.text}</p>
                 </div>
               ))}
+              {dmThinking && ( // DM 思考时的占位符消息
+                <div className="p-3 rounded-lg shadow-sm bg-gray-700 text-gray-300 self-start text-left animate-pulse">
+                  <span className="font-bold text-sm">[DM 正在思考...]</span>
+                  <p className="mt-1">...</p>
+                </div>
+              )}
               <div ref={messagesEndRef} /> {/* 滚动目标 */}
             </div>
           </div>
@@ -315,30 +390,36 @@ export default function GameSessionView({
           {/* 用户输入区 */}
           <form
             onSubmit={handleSubmitAction}
-            className="flex-shrink-0 flex mt-4 space-x-2"
+            className="flex-shrink-0 flex flex-col mt-4 space-y-2" // Changed to flex-col and space-y-2 for better layout with hint
           >
-            <input
-              type="text"
+            <TextareaAutosize
               value={userActionInput}
               onChange={(e) => setUserActionInput(e.target.value)}
+              onKeyDown={handleKeyDown} // Add onKeyDown handler
               placeholder="你的行动..."
               className="flex-grow p-3 rounded-lg bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 transition"
-              disabled={isProcessing}
+              disabled={isProcessing || dmThinking}
+              minRows={1}
+              maxRows={5}
             />
+            {/* Hint for Ctrl+Enter submission */}
+            <p className="text-right text-gray-500 text-xs mr-2">
+              按下 `Ctrl + Enter` (或 `Cmd + Enter`) 提交
+            </p>
             <button
               type="submit"
-              disabled={isProcessing || !userActionInput.trim()}
+              disabled={isProcessing || dmThinking || !userActionInput.trim()}
               className={`
                 px-6 py-3 rounded-lg shadow-md transition transform
                 ${
-                  isProcessing || !userActionInput.trim()
+                  isProcessing || dmThinking || !userActionInput.trim()
                     ? "bg-gray-600 cursor-not-allowed"
                     : "bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 active:scale-95"
                 }
                 text-white font-bold
               `}
             >
-              {isProcessing ? "思考中..." : "发送"}
+              {dmThinking ? "思考中..." : "发送"}
             </button>
           </form>
         </div>
@@ -438,26 +519,32 @@ export default function GameSessionView({
             )}
           </div>
 
-          {/* 故事进度/标志 (如果需要显示) */}
-          {/*
+          {/* 故事进度/标志 */}
           <div>
-            <h3 className="text-lg font-semibold mb-2 text-red-300">故事进度</h3>
-            {gameData.state.gameProgression && Object.keys(gameData.state.gameProgression).length > 0 ? (
+            <h3 className="text-lg font-semibold mb-2 text-red-300">
+              故事进度
+            </h3>
+            {gameData.state.gameProgression &&
+            Object.keys(gameData.state.gameProgression).length > 0 ? (
               <ul className="space-y-1">
-                {Object.entries(gameData.state.gameProgression).map(([flag, value]) => (
-                  <li key={flag} className="flex justify-between items-center text-gray-300">
-                    <span>{flag}:</span>
-                    <span className="px-2 py-0.5 bg-gray-700 rounded-full text-purple-300 text-sm">
-                      {String(value)}
-                    </span>
-                  </li>
-                ))}
+                {Object.entries(gameData.state.gameProgression).map(
+                  ([flag, value]) => (
+                    <li
+                      key={flag}
+                      className="flex justify-between items-center text-gray-300"
+                    >
+                      <span>{flag}:</span>
+                      <span className="px-2 py-0.5 bg-gray-700 rounded-full text-purple-300 text-sm">
+                        {String(value)}
+                      </span>
+                    </li>
+                  )
+                )}
               </ul>
             ) : (
               <p className="text-gray-400 text-sm">目前没有特殊的故事标志。</p>
             )}
           </div>
-          */}
         </div>
       </div>
     </div>

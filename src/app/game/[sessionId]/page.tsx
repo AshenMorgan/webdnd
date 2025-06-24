@@ -325,7 +325,8 @@ export async function handleUserAction(sessionId: string, userAction: string) {
     const parseActionPrompt: ChatCompletionMessageParam[] = [
       {
         role: "system",
-        content: `你是一个分析助手，专门解析玩家在D&D游戏中的行动。
+        content: `你是一个分析助手，专门解析玩家在D&D游戏中的行动。你的任务是识别玩家的意图、行动类型、目标、相关属性和可能的状态变化，并将其结构化为JSON格式。
+        当玩家尝试进行某些行动时，你需要判断是否需要掷骰子，并提供相关的属性和难度等级。
         你将接收玩家的行动描述和当前游戏状态，并**严格按照提供的JSON Schema输出一个JSON对象**，不要包含任何额外文本或Markdown格式。
 
         当前游戏状态：
@@ -350,7 +351,7 @@ export async function handleUserAction(sessionId: string, userAction: string) {
     ];
 
     const parsedActionResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4.1-mini",
       messages: parseActionPrompt,
       temperature: 0.2,
       max_tokens: 300,
@@ -379,17 +380,19 @@ export async function handleUserAction(sessionId: string, userAction: string) {
     const creativeDMPrompt: ChatCompletionMessageParam[] = [
       {
         role: "system",
-        content: `你是一个经验丰富且富有创意的D&D地下城主（DM）。
+        content: `你是一个经验丰富，幽默风趣且富有创意的D&D地下城主（DM）。
         你的任务是根据玩家的行动、游戏世界的当前状态以及已经发生的逻辑更新来生成生动、引人入胜的叙述。
         当前场景是："${scenario["Dnd-Scenario"]}"。
         游戏背景：${scenario.startingPoint}。
         你的回应应该推动故事发展，描述环境，引入挑战，并暗示可能的选择。
         
-        **请将以下游戏机制和状态变化无缝地编织到你的叙述中，让它们成为故事的一部分，而不仅仅是事实陈述：**
+        **请将以下游戏机制和状态变化添加你的叙述中。：**
         -   **属性检定/技能使用**: 描述玩家如何运用他们的属性和技能来尝试行动，以及这些尝试的成功或失败如何影响结果。
         -   **物品**: 提及玩家使用或发现的物品，以及它们在当前情境中的作用。
         -   **地点**: 生动描述当前位置，以及玩家行动可能导致的地点变化。
         -   **故事进度**: 如果有关键的故事标志更新，请在叙述中反映出来。
+        例如：你发现了物品A，物品A已经添加到了你的物品栏；你来到了地点B；现在的关键目标是“目标X”；你成功使用了技能Y，你的技能Y等级提升了1。
+        **绝对不要要求玩家掷骰或进行任何显式的游戏机制操作。你的叙述应该直接报告这些机制的 *结果* 或 *后果*。**
 
         结合玩家的最新行动，以及以下已发生的逻辑更新和可能的掷骰结果：
         玩家行动解析和初步状态影响: ${userActionNarrativeContext}
@@ -407,7 +410,8 @@ export async function handleUserAction(sessionId: string, userAction: string) {
         2.  **叙述完整性**: 你的回应应当是一个简短而完整的、自洽的叙事片段。即使篇幅有限，也要力求在当前回合结束时，提供一个清晰的场景描述、行动后果，并自然地引出玩家的下一个决策点。
         3.  **长度控制**: 你的叙述文本应尽量保持在 **600 token** 以内，专注于描述性叙述和情境推进，去除无谓的修辞。
         4.  **引导而非命令**: 避免直接给出选项，而是通过描述引导玩家下一步行动。
-        5.  **掷骰结果**: 如果之前进行了掷骰，请在你的叙述中清晰地提及掷骰结果（例如，"你成功地通过了力量检定..." 或 "你的敏捷检定失败了..."）。`,
+        5.  **掷骰结果**: 如果之前进行了掷骰，请在你的叙述中清晰地提及掷骰结果（例如，"你成功地通过了力量检定..." 或 "你的敏捷检定失败了..."）。
+        6.  **幽默感**: 适当加入幽默与讽刺元素，保持叙述轻松有趣。`,
       },
       // 历史对话消息，用于提供上下文
       // 注意：这里包含了玩家最近的行动，以便DM理解上下文
@@ -425,9 +429,9 @@ export async function handleUserAction(sessionId: string, userAction: string) {
     ];
 
     const creativeDMPromptResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4.1-mini",
       messages: creativeDMPrompt,
-      temperature: 0.9, // 提高温度以增加创意性
+      temperature: 0.8, // 提高温度以增加创意性
       max_tokens: 700, // 略高于期望叙述长度，允许模型完成思路
       // 不设置 response_format 为 json_object，因为我们想要纯文本
     });
@@ -531,7 +535,7 @@ export async function handleUserAction(sessionId: string, userAction: string) {
     ];
 
     const dmStateChangeResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4.1-mini",
       messages: dmStateChangePrompt,
       temperature: 0.0, // 极低的温度，确保结构化和准确性
       max_tokens: 300,
@@ -541,6 +545,7 @@ export async function handleUserAction(sessionId: string, userAction: string) {
     const dmChanges: Partial<DMResponseContent> = JSON.parse(
       dmStateChangeResponse.choices[0].message?.content || "{}"
     );
+    console.log(549, "DM Changes:", dmChanges);
 
     // 应用DM回应触发的游戏状态变化
     applyGameStateChanges(currentGameState, dmChanges, finalAttributes); // finalAttributes 在这里仅用于类型兼容性，实际不用于掷骰
