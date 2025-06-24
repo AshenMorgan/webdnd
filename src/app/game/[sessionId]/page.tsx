@@ -151,7 +151,7 @@ function applyGameStateChanges(
  * @param userAction 用户的文本行动描述
  * @returns 更新后的游戏状态或错误信息
  */
-export async function handleUserAction(sessionId: string, userAction: string) {
+async function handleUserAction(sessionId: string, userAction: string) {
   "use server"; // 明确标记为 Server Action
   const supabase = await supabaseServer(); // Server Action 中可以使用 supabaseServer
 
